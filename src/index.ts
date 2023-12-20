@@ -1,12 +1,52 @@
-import express  from "express";
-import { PrismaClient } from "@prisma/client";
+import express, { NextFunction, Request, Response } from 'express';
+import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
+import jwt, { JwtPayload } from 'jsonwebtoken';
 
 const app = express();
 const PORT = 5000;
 const prisma = new PrismaClient();
 
 app.use(express.json())
+
+interface UserData {
+  id: string;
+  name: string;
+  address: string;
+}
+
+interface ValidationRequest extends Request {
+  userData: UserData
+}
+
+const userAccess = (req: Request, res: Response, next: NextFunction) => {
+  const validationReq = req as ValidationRequest
+  const {authorization} = validationReq.headers;
+
+  console.log('here: ', authorization)
+
+  if(!authorization){
+      return res.status(401).json({
+          message: 'Token diperlukan'
+      })
+  }
+
+  const token = authorization.split(' ')[1];
+  const secret = process.env.JWT_SECRET!;
+
+  try {
+      const jwtDecode = jwt.verify(token, secret);
+
+      if(typeof jwtDecode !== 'string'){
+          validationReq.userData = jwtDecode as UserData
+      }
+  } catch (error) {
+      return res.status(401).json({
+          message: 'Unauthorized'
+      })
+  }
+  next()
+}
 
 // register
 app.post('/register',async (req, res) => {
@@ -51,12 +91,22 @@ app.post('/login', async(req,res)=> {
   const isPassValid = await bcrypt.compare(password,user.password)
   
   if(isPassValid){
+    const payload = {
+      id: user.id,
+        name: user.name,
+        address: user.address
+    }
+    const secret = process.env.JWT_SECRET!;
+    const jwtExpiresIn = 60 * 60 * 1;
+    const token = jwt.sign(payload,secret,{expiresIn:jwtExpiresIn})
+
     return res.json({
       data: {
         id: user.id,
         name: user.name,
         address: user.address
-      }
+      },
+      token : token
     })
   } else {
     return res.status(403).json({
@@ -66,7 +116,7 @@ app.post('/login', async(req,res)=> {
 }) 
 
 // create
-app.post('/users', async (req,res, next) => {
+app.post('/users', userAccess, async (req,res, next) => {
   const {email, name, address} = req.body;
   const result = await prisma.users.create({
     data: {
@@ -82,7 +132,7 @@ app.post('/users', async (req,res, next) => {
 })
 
 // read
-app.get('/users',async(req,res) => {
+app.get('/users',userAccess,async(req,res) => {
   const result = await prisma.users.findMany({
     select:{
       id: true,
@@ -98,7 +148,7 @@ app.get('/users',async(req,res) => {
 })
 
 // read by id
-app.get('/users/:id',async (req, res) => {
+app.get('/users/:id',userAccess,async (req, res) => {
   const {id} = req.params;
   const result = await prisma.users.findUnique({
     select:{
@@ -118,7 +168,7 @@ app.get('/users/:id',async (req, res) => {
 })
 
 // update
-app.patch('/users/:id',async (req, res) => {
+app.patch('/users/:id',userAccess,async (req, res) => {
   const {id} = req.params;
   const {email, name, address} = req.body;
 
@@ -138,7 +188,7 @@ app.patch('/users/:id',async (req, res) => {
 })
 
 // delete
-app.delete('/users/:id', async(req,res) =>{
+app.delete('/users/:id',userAccess, async(req,res) =>{
   const {id} = req.params
   await prisma.users.delete({
     where:{
